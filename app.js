@@ -21,6 +21,7 @@ class User {
     this.bigBreak = false;
     this.beforeBigBreak = 3;
     this.breakCoef = 0.3;
+    this.sessions = [];
   }
 
   setWorkSession(mins) {
@@ -49,6 +50,34 @@ class User {
     };
 
     bot.sendMessage(msg.chat.id, 'You have reseted your account', opts);
+  }
+}
+
+class Session {
+  start = Date.now();
+  end;
+  duration;
+  id = String(Date.now()).split(-10);
+  constructor() {}
+
+  setEnd(end) {
+    if (!this.end) {
+      // console.log(this);
+      this.end = end;
+      this.duration = this.end - this.start;
+    }
+  }
+}
+
+class WorkSession extends Session {
+  type = 'work';
+}
+
+class BreakSession extends Session {
+  type = 'break';
+  constructor(workObject, breakCoef) {
+    super();
+    this.setEnd(workObject.duration * breakCoef + this.start);
   }
 }
 
@@ -85,7 +114,7 @@ bot.onText(/\/reset/, (msg) => {
   User.deleteUser(msg);
 });
 
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   if (!users.some((el) => el.chat_id == chatId)) {
     users.push(new User(chatId));
@@ -94,7 +123,7 @@ bot.onText(/\/start/, async (msg) => {
   showStartMenu(msg, 'Welcome to Flowodoro!');
 });
 
-bot.onText(/Options/, async (msg) => {
+bot.onText(/Options/, (msg) => {
   const user = findUser(msg);
   const opts = {
     reply_markup: {
@@ -129,7 +158,7 @@ function disableOptions() {
 }
 
 function changeOptions() {
-  bot.onText(/Set work session time/, async (msg) => {
+  bot.onText(/Set work session time/, (msg) => {
     const opts = {
       reply_markup: {
         resize_keyboard: true,
@@ -261,6 +290,91 @@ function changeOptions() {
       bot.removeTextListener(/.*/);
     });
   });
+}
+
+async function showTimerMenu(msg, message, isWork = true) {
+  const opts = {
+    reply_markup: {
+      resize_keyboard: true,
+      one_time_keyboard: true,
+      keyboard: [
+        [{ text: 'Take break' }, { text: 'Back to work!' }],
+        [{ text: 'To menu' }, { text: 'Show timer' }],
+      ],
+    },
+  };
+  if (isWork) opts.reply_markup.keyboard[0].pop();
+  else opts.reply_markup.keyboard[0].shift();
+  return bot.sendMessage(msg.chat.id, message, opts);
+}
+
+bot.onText(/Start timer/, async (msg) => {
+  disableOptions();
+
+  const user = findUser(msg);
+  user.sessions.push(new WorkSession());
+
+  let secondsPassed = 0;
+
+  showTimerMenu(msg, 'Time to do some work!');
+
+  const timer = setInterval(() => {
+    secondsPassed++;
+  }, 1000);
+
+  bot.onText(/Take break/, (msg) => {
+    if (user.workSession * 60 > secondsPassed) {
+      showTimerMenu(
+        msg,
+        `You have to work for ${secondsToTimer(
+          user.workSession * 60 - secondsPassed,
+          { hours: false, minutes: true, seconds: false }
+        )} more minutes`
+      );
+      return;
+    }
+
+    user.sessions.at(-1).setEnd(Date.now());
+    user.sessions.push(new BreakSession(user.sessions.at(-1), user.breakCoef));
+    clearInterval(timer);
+    showTimerMenu(
+      msg,
+      `Much deserved break! You can relax for ${secondsToTimer(
+        user.sessions.at(-1).duration / 1000,
+        { hours: false, minutes: true, seconds: true }
+      )}`,
+      false
+    );
+    bot.onText(/Back to work!/, (msg) => {});
+  });
+
+  bot.onText(/To menu/, (msg) => {
+    clearInterval(timer);
+    bot.removeTextListener(/Show timer/);
+    bot.removeTextListener(/Take break/);
+    bot.removeTextListener(/To menu/);
+    user.sessions.pop();
+    showStartMenu(msg, 'Welcome back!');
+  });
+
+  bot.onText(/Show timer/, (msg) => {
+    showTimerMenu(msg, secondsToTimer(secondsPassed));
+  });
+});
+
+function secondsToTimer(
+  secs,
+  opts = { hours: true, minutes: true, seconds: true }
+) {
+  const hours = Math.trunc(secs / (60 * 60));
+  secs -= hours * 60 * 60;
+  const mins = Math.trunc(secs / 60);
+  secs = Math.trunc(secs - mins * 60);
+  let time = [];
+  if (opts.hours) time.push(`${String(hours).padStart(2, 0)}`);
+  if (opts.minutes) time.push(`${String(mins).padStart(2, 0)}`);
+  if (opts.seconds) time.push(`${String(secs).padStart(2, 0)}`);
+  return time.join(':');
 }
 
 ///////////////////// DEBUG /////////////////////
