@@ -1,10 +1,11 @@
-require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
+import dotenv from 'dotenv';
+dotenv.config();
+import TelegramBot from 'node-telegram-bot-api';
 
 // Replace the value below with the Telegram token you receive from @BotFather
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
-// Reset queue in case of error
+// Reset queue in case of input during down state that can cause the script to lock up on launch
 // prettier-ignore
 (async () => {
   fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-1`, {
@@ -63,7 +64,6 @@ class Session {
 
   setEnd(end) {
     if (!this.end) {
-      // console.log(this);
       this.end = end;
       this.duration = Math.round(this.end - this.start);
     }
@@ -97,8 +97,9 @@ class bigBreakSession extends BreakSession {
 const users = [];
 
 // Helper functions
-
+// Find user inside database by using the
 function findUser(msg) {
+  console.log(typeof msg);
   return users.find((el) => el.chat_id == msg.chat.id);
 }
 
@@ -114,15 +115,19 @@ function showStartMenu(msg, message = 'What do you want to do next?') {
   bot.sendMessage(msg.chat.id, message, opts);
 }
 
-const menuOfOptions = [
-  'Set work session time',
-  'Set break coefficient',
-  'Set big break',
-  'Small breaks before big one',
-];
-
-function disableOptions() {
-  menuOfOptions.forEach((el) => bot.removeTextListener(`/${el}/`));
+function secondsToTimer(
+  secs,
+  opts = { hours: true, minutes: true, seconds: true }
+) {
+  const hours = Math.trunc(secs / (60 * 60));
+  secs -= hours * 60 * 60;
+  const mins = Math.trunc(secs / 60);
+  secs = Math.trunc(secs - mins * 60);
+  let time = [];
+  if (opts.hours) time.push(`${String(hours).padStart(2, 0)}`);
+  if (opts.minutes) time.push(`${String(mins).padStart(2, 0)}`);
+  if (opts.seconds) time.push(`${String(secs).padStart(2, 0)}`);
+  return time.join(':');
 }
 
 bot.setMyCommands([
@@ -136,44 +141,7 @@ bot.setMyCommands([
   },
 ]);
 
-bot.onText(/\/reset/, (msg) => {
-  User.deleteUser(msg);
-});
-
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-
-  enableOptions();
-  if (!users.some((el) => el.chat_id == chatId)) {
-    users.push(new User(chatId));
-  }
-
-  showStartMenu(msg, 'Welcome to Flowodoro!');
-});
-
-bot.onText(/Back/, (msg) => {
-  showStartMenu(msg);
-});
-
-bot.onText(/Options/, (msg) => {
-  const user = findUser(msg);
-  const opts = {
-    reply_markup: {
-      resize_keyboard: true,
-      one_time_keyboard: true,
-      keyboard: [
-        [{ text: 'Set work session time' }, { text: 'Set break coefficient' }],
-        [{ text: 'Set big break' }, { text: 'Small breaks before big one' }],
-        [{ text: 'Back' }],
-      ],
-    },
-  };
-  if (user.bigBreak == false) opts.reply_markup.keyboard[1].pop();
-
-  bot.sendMessage(msg.chat.id, 'Options:', opts);
-});
-
-function enableOptions() {
+function enableStartMenu() {
   bot.onText(/Set work session time/, (msg) => {
     const opts = {
       reply_markup: {
@@ -306,7 +274,64 @@ function enableOptions() {
       bot.removeTextListener(/.*/);
     });
   });
+
+  bot.onText(/Options/, (msg) => {
+    const user = findUser(msg);
+    const opts = {
+      reply_markup: {
+        resize_keyboard: true,
+        one_time_keyboard: true,
+        keyboard: [
+          [
+            { text: 'Set work session time' },
+            { text: 'Set break coefficient' },
+          ],
+          [{ text: 'Set big break' }, { text: 'Small breaks before big one' }],
+          [{ text: 'Back' }],
+        ],
+      },
+    };
+    if (user.bigBreak == false) opts.reply_markup.keyboard[1].pop();
+
+    bot.sendMessage(msg.chat.id, 'Options:', opts);
+  });
+
+  bot.onText(/Back/, (msg) => {
+    showStartMenu(msg);
+  });
+
+  bot.onText(/Start timer/, startWorkBreakSession);
 }
+
+const startMenu = [
+  'Set work session time',
+  'Set big break',
+  'Set break coefficient',
+  'Small breaks before big one',
+  'Options',
+  'Back',
+  'Start timer',
+];
+
+function disableOptions() {
+  startMenu.forEach((el) => bot.removeTextListener(`/${el}/`));
+}
+
+// Bot commands
+bot.onText(/\/reset/, (msg) => {
+  User.deleteUser(msg);
+});
+
+bot.onText(/\/start/, (msg) => {
+  // If user doesn't exist in the base - create new User object
+  if (!users.some((el) => el.chat_id == msg.chat.id)) {
+    users.push(new User(msg.chat.id));
+  }
+  enableStartMenu();
+  showStartMenu(msg, 'Welcome to Flowodoro!');
+});
+
+/////////////////////////////////////////////////////////
 
 async function showTimerMenu(msg, message, isWork = true) {
   const opts = {
@@ -324,15 +349,15 @@ async function showTimerMenu(msg, message, isWork = true) {
   return bot.sendMessage(msg.chat.id, message, opts);
 }
 
+function removeTimerListeners() {
+  bot.removeTextListener(/Back to work!/);
+  bot.removeTextListener(/Show timer/);
+  bot.removeTextListener(/Take break/);
+  bot.removeTextListener(/To menu/);
+}
+
 function startWorkBreakSession(msg) {
   disableOptions();
-
-  function removeTimerListeners() {
-    bot.removeTextListener(/Back to work!/);
-    bot.removeTextListener(/Show timer/);
-    bot.removeTextListener(/Take break/);
-    bot.removeTextListener(/To menu/);
-  }
 
   const user = findUser(msg);
   user.sessions.push(new WorkSession());
@@ -399,23 +424,6 @@ function startWorkBreakSession(msg) {
     console.log(secondsPassed);
     showTimerMenu(msg, secondsToTimer(secondsPassed));
   });
-}
-
-bot.onText(/Start timer/, startWorkBreakSession);
-
-function secondsToTimer(
-  secs,
-  opts = { hours: true, minutes: true, seconds: true }
-) {
-  const hours = Math.trunc(secs / (60 * 60));
-  secs -= hours * 60 * 60;
-  const mins = Math.trunc(secs / 60);
-  secs = Math.trunc(secs - mins * 60);
-  let time = [];
-  if (opts.hours) time.push(`${String(hours).padStart(2, 0)}`);
-  if (opts.minutes) time.push(`${String(mins).padStart(2, 0)}`);
-  if (opts.seconds) time.push(`${String(secs).padStart(2, 0)}`);
-  return time.join(':');
 }
 
 ///////////////////// DEBUG /////////////////////
