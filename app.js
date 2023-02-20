@@ -4,6 +4,7 @@ const TelegramBot = require('node-telegram-bot-api');
 // Replace the value below with the Telegram token you receive from @BotFather
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
+// Reset queue in case of error
 // prettier-ignore
 (async () => {
   fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-1`, {
@@ -64,7 +65,7 @@ class Session {
     if (!this.end) {
       // console.log(this);
       this.end = end;
-      this.duration = this.end - this.start;
+      this.duration = Math.round(this.end - this.start);
     }
   }
 }
@@ -75,13 +76,27 @@ class WorkSession extends Session {
 
 class BreakSession extends Session {
   type = 'break';
+  realEnd;
+
   constructor(workObject, breakCoef) {
     super();
-    this.setEnd(workObject.duration * breakCoef + this.start);
+    this.setEnd(Math.round(workObject.duration * breakCoef + this.start));
+  }
+
+  setRealEnd() {
+    if (!this.realEnd) {
+      this.realEnd = Date.now();
+    }
   }
 }
 
+class bigBreakSession extends BreakSession {
+  type = 'bigBreak';
+}
+
 const users = [];
+
+// Helper functions
 
 function findUser(msg) {
   return users.find((el) => el.chat_id == msg.chat.id);
@@ -97,6 +112,17 @@ function showStartMenu(msg, message = 'What do you want to do next?') {
   };
 
   bot.sendMessage(msg.chat.id, message, opts);
+}
+
+const menuOfOptions = [
+  'Set work session time',
+  'Set break coefficient',
+  'Set big break',
+  'Small breaks before big one',
+];
+
+function disableOptions() {
+  menuOfOptions.forEach((el) => bot.removeTextListener(`/${el}/`));
 }
 
 bot.setMyCommands([
@@ -116,11 +142,17 @@ bot.onText(/\/reset/, (msg) => {
 
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+
+  enableOptions();
   if (!users.some((el) => el.chat_id == chatId)) {
     users.push(new User(chatId));
   }
 
   showStartMenu(msg, 'Welcome to Flowodoro!');
+});
+
+bot.onText(/Back/, (msg) => {
+  showStartMenu(msg);
 });
 
 bot.onText(/Options/, (msg) => {
@@ -132,6 +164,7 @@ bot.onText(/Options/, (msg) => {
       keyboard: [
         [{ text: 'Set work session time' }, { text: 'Set break coefficient' }],
         [{ text: 'Set big break' }, { text: 'Small breaks before big one' }],
+        [{ text: 'Back' }],
       ],
     },
   };
@@ -139,25 +172,8 @@ bot.onText(/Options/, (msg) => {
 
   bot.sendMessage(msg.chat.id, 'Options:', opts);
 });
-changeOptions();
 
-// const settings = []
-// options (msg) {
-
-// }
-//
-const setOfOptions = [
-  'Set work session time',
-  'Set break coefficient',
-  'Set big break',
-  'Small breaks before big one',
-];
-
-function disableOptions() {
-  setOfOptions.forEach((el) => bot.removeTextListener(`/${el}/`));
-}
-
-function changeOptions() {
+function enableOptions() {
   bot.onText(/Set work session time/, (msg) => {
     const opts = {
       reply_markup: {
@@ -308,8 +324,15 @@ async function showTimerMenu(msg, message, isWork = true) {
   return bot.sendMessage(msg.chat.id, message, opts);
 }
 
-bot.onText(/Start timer/, async (msg) => {
+function startWorkBreakSession(msg) {
   disableOptions();
+
+  function removeTimerListeners() {
+    bot.removeTextListener(/Back to work!/);
+    bot.removeTextListener(/Show timer/);
+    bot.removeTextListener(/Take break/);
+    bot.removeTextListener(/To menu/);
+  }
 
   const user = findUser(msg);
   user.sessions.push(new WorkSession());
@@ -318,7 +341,7 @@ bot.onText(/Start timer/, async (msg) => {
 
   showTimerMenu(msg, 'Time to do some work!');
 
-  const timer = setInterval(() => {
+  let timer = setInterval(() => {
     secondsPassed++;
   }, 1000);
 
@@ -337,30 +360,48 @@ bot.onText(/Start timer/, async (msg) => {
     user.sessions.at(-1).setEnd(Date.now());
     user.sessions.push(new BreakSession(user.sessions.at(-1), user.breakCoef));
     clearInterval(timer);
+
+    let breakTime = Math.round(user.sessions.at(-1).duration / 1000);
+
     showTimerMenu(
       msg,
-      `Much deserved break! You can relax for ${secondsToTimer(
-        user.sessions.at(-1).duration / 1000,
-        { hours: false, minutes: true, seconds: true }
-      )}`,
+      `Much deserved break! You can relax for ${secondsToTimer(breakTime)}`,
       false
     );
-    bot.onText(/Back to work!/, (msg) => {});
+
+    secondsPassed = breakTime;
+    console.log(secondsPassed);
+    timer = setInterval(() => {
+      secondsPassed--;
+      if (secondsPassed <= 0) {
+        removeTimerListeners();
+        showTimerMenu(msg, "It's time to do some work", false);
+        clearInterval(timer);
+      }
+    }, 1000);
+
+    bot.onText(/Back to work!/, (msg) => {
+      user.sessions.at(-1).setRealEnd();
+      clearInterval(timer);
+      removeTimerListeners();
+      startWorkBreakSession(msg);
+    });
   });
 
   bot.onText(/To menu/, (msg) => {
     clearInterval(timer);
-    bot.removeTextListener(/Show timer/);
-    bot.removeTextListener(/Take break/);
-    bot.removeTextListener(/To menu/);
+    removeTimerListeners();
     user.sessions.pop();
     showStartMenu(msg, 'Welcome back!');
   });
 
   bot.onText(/Show timer/, (msg) => {
+    console.log(secondsPassed);
     showTimerMenu(msg, secondsToTimer(secondsPassed));
   });
-});
+}
+
+bot.onText(/Start timer/, startWorkBreakSession);
 
 function secondsToTimer(
   secs,
@@ -379,5 +420,5 @@ function secondsToTimer(
 
 ///////////////////// DEBUG /////////////////////
 bot.on('polling_error', console.log);
-setInterval(() => console.log(users), 5000);
+setInterval(() => console.log(users[0].sessions), 5000);
 /////////////////////////////////////////////////
