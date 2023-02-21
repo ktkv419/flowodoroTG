@@ -2,20 +2,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 import TelegramBot from 'node-telegram-bot-api';
 
-// Replace the value below with the Telegram token you receive from @BotFather
-const token = process.env.TELEGRAM_BOT_TOKEN;
-
-// Reset queue in case of input during down state that can cause the script to lock up on launch
-// prettier-ignore
-(async () => {
-  fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-1`, {
-    method: 'POST',
-  });
-})();
-
-// Create a bot that uses 'polling' to fetch new updates
-const bot = new TelegramBot(token, { polling: true });
-
 class User {
   constructor(chatId) {
     this.chat_id = chatId;
@@ -94,25 +80,11 @@ class bigBreakSession extends BreakSession {
   type = 'bigBreak';
 }
 
-const users = [];
-
-// Helper functions
+//////////////////////// Helper functions ////////////////////////
 // Find user inside database by using the
 function findUser(msg) {
   console.log(typeof msg);
   return users.find((el) => el.chat_id == msg.chat.id);
-}
-
-function showStartMenu(msg, message = 'What do you want to do next?') {
-  const opts = {
-    reply_markup: {
-      resize_keyboard: true,
-      one_time_keyboard: true,
-      keyboard: [[{ text: 'Start timer' }, { text: 'Options' }]],
-    },
-  };
-
-  bot.sendMessage(msg.chat.id, message, opts);
 }
 
 function secondsToTimer(
@@ -129,24 +101,49 @@ function secondsToTimer(
   if (opts.seconds) time.push(`${String(secs).padStart(2, 0)}`);
   return time.join(':');
 }
+/////////////////////////////////////////////////////////////////
 
-bot.setMyCommands([
-  {
-    command: '/start',
-    description: 'Start the timer',
-  },
-  {
-    command: '/reset',
-    description: 'Reset settings',
-  },
-]);
+//////////////// Initialization functions ////////////////
+function startBot() {
+  bot.onText(/\/reset/, (msg) => {
+    if (findUser(msg)) User.deleteUser(msg);
+  });
 
-function enableStartMenu() {
+  bot.onText(/\/start/, (msg) => {
+    // If user doesn't exist in the base - create new User object and add him to the database
+    if (!users.some((el) => el.chat_id == msg.chat.id)) {
+      users.push(new User(msg.chat.id));
+    }
+    sendMainMenu(msg, 'Welcome to Flowodoro!');
+  });
+
+  bot.setMyCommands([
+    {
+      command: '/start',
+      description: 'Start the timer',
+    },
+    {
+      command: '/reset',
+      description: 'Reset settings',
+    },
+  ]);
+}
+
+const mainMenu = [
+  'Set work session time',
+  'Set big break',
+  'Set break coefficient',
+  'Small breaks before big one',
+  'Options',
+  'Back',
+  'Start timer',
+];
+
+function enableMainMenu() {
   bot.onText(/Set work session time/, (msg) => {
     const opts = {
       reply_markup: {
         resize_keyboard: true,
-        one_time_keyboard: true,
         keyboard: [
           [{ text: '0' }, { text: '15' }, { text: '30' }],
           [{ text: '45' }, { text: '60' }, { text: '75' }],
@@ -165,9 +162,9 @@ function enableStartMenu() {
       // console.log(msg.text.is);
       if (isFinite(number) && Number(number) >= 0) {
         user.setWorkSession(Number(msg.text));
-        showStartMenu(msg, 'The setting was succesfully changed');
+        sendMainMenu(msg, 'The setting was succesfully changed');
       } else
-        showStartMenu(
+        sendMainMenu(
           msg,
           'There was a problem with your input, please try again and type in a valid number'
         );
@@ -190,7 +187,7 @@ function enableStartMenu() {
       bot.removeTextListener(/.*/);
       if (!msg.text == 'Yes' || !msg.text == 'No') {
         console.log(msg.text);
-        showStartMenu(
+        sendMainMenu(
           msg,
           'That was an invalid input, please try again and press a button or type "Yes" or "No"'
         );
@@ -200,7 +197,7 @@ function enableStartMenu() {
       if (msg.text == 'Yes') user.setBigBreak(true);
       else if (msg.text == 'No') user.setBigBreak(false);
       console.log(users);
-      showStartMenu(msg, 'The setting was succesfully changed');
+      sendMainMenu(msg, 'The setting was succesfully changed');
     });
   });
 
@@ -226,14 +223,14 @@ function enableStartMenu() {
       // console.log(msg.text.is);
       if (isFinite(number) && number > 0 && number < 1) {
         user.setBreakCoef(number);
-        showStartMenu(
+        sendMainMenu(
           msg,
           `The setting was succesfully changed. 60 minutes of work will equal to ${
             60 * number
           } minutes of break`
         );
       } else {
-        showStartMenu(
+        sendMainMenu(
           msg,
           'There was a problem with your input, please try again and type in a valid number'
         );
@@ -264,9 +261,9 @@ function enableStartMenu() {
       // console.log(msg.text.is);
       if (isFinite(number) && number > 0) {
         user.setBeforeBigBreak(number);
-        showStartMenu(msg, `The setting was succesfully changed`);
+        sendMainMenu(msg, `The setting was succesfully changed`);
       } else
-        showStartMenu(
+        sendMainMenu(
           msg,
           'There was a problem with your input, please try again and type in a valid number'
         );
@@ -297,41 +294,40 @@ function enableStartMenu() {
   });
 
   bot.onText(/Back/, (msg) => {
-    showStartMenu(msg);
+    sendMainMenu(msg);
   });
 
   bot.onText(/Start timer/, startWorkBreakSession);
 }
+enableMainMenu();
 
-const startMenu = [
-  'Set work session time',
-  'Set big break',
-  'Set break coefficient',
-  'Small breaks before big one',
-  'Options',
-  'Back',
-  'Start timer',
-];
-
-function disableOptions() {
-  startMenu.forEach((el) => bot.removeTextListener(`/${el}/`));
+function disableMainMenu() {
+  mainMenu.forEach((el) => bot.removeTextListener(`/${el}/`));
 }
+/////////////////////////////////////////////////////////////////////
 
-// Bot commands
-bot.onText(/\/reset/, (msg) => {
-  User.deleteUser(msg);
-});
+function sendMainMenu(
+  msg,
+  type = 'start',
+  message = 'What do you want to do next?'
+) {
+  const opts = {
+    reply_markup: {
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    },
+  };
 
-bot.onText(/\/start/, (msg) => {
-  // If user doesn't exist in the base - create new User object
-  if (!users.some((el) => el.chat_id == msg.chat.id)) {
-    users.push(new User(msg.chat.id));
+  if (type == 'start') {
+    opts.reply_markup.keyboard = [
+      [{ text: 'Start timer' }, { text: 'Options' }],
+    ];
   }
-  enableStartMenu();
-  showStartMenu(msg, 'Welcome to Flowodoro!');
-});
 
-/////////////////////////////////////////////////////////
+  if (type == 'options') {
+  }
+  bot.sendMessage(msg.chat.id, message, opts);
+}
 
 async function showTimerMenu(msg, message, isWork = true) {
   const opts = {
@@ -357,7 +353,7 @@ function removeTimerListeners() {
 }
 
 function startWorkBreakSession(msg) {
-  disableOptions();
+  disableMainMenu();
 
   const user = findUser(msg);
   user.sessions.push(new WorkSession());
@@ -417,7 +413,7 @@ function startWorkBreakSession(msg) {
     clearInterval(timer);
     removeTimerListeners();
     user.sessions.pop();
-    showStartMenu(msg, 'Welcome back!');
+    sendMainMenu(msg, 'Welcome back!');
   });
 
   bot.onText(/Show timer/, (msg) => {
@@ -426,7 +422,35 @@ function startWorkBreakSession(msg) {
   });
 }
 
+//// Bot initialization
+
+////////////////////// Initialization function //////////////////////
+// Import token from dotenv
+const token = process.env.TELEGRAM_BOT_TOKEN;
+
+// Reset queue in case of input during down state that can cause the script to lock up on launch
+// prettier-ignore
+(async () => {
+  fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=-1`, {
+    method: 'POST',
+  });
+})();
+
+// Create a bot that uses 'polling' to fetch new updates
+const bot = new TelegramBot(token, { polling: true });
+
+// Create empty array of users
+const users = [];
+
+// States
+let stateMainMenu = false;
+let stateTimerMenu = false;
+
+// Functionality initizalization
+startBot();
+enableMainMenu();
+
 ///////////////////// DEBUG /////////////////////
 bot.on('polling_error', console.log);
-setInterval(() => console.log(users[0].sessions), 5000);
+// setInterval(() => console.log(users[0].sessions), 5000);
 /////////////////////////////////////////////////
